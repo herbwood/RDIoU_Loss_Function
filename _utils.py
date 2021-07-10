@@ -59,4 +59,3 @@ class IntermediateLayerGetter(nn.ModuleDict):
                 out_name = self.return_layers[name]
                 out[out_name] = x
         return out
-© 2021 GitHub, Inc.
