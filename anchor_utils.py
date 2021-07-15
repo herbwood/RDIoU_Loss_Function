@@ -68,12 +68,14 @@ class AnchorGenerator(nn.Module):
             device = base_anchors.device
 
             # For output anchor, compute [x_center, y_center, x_center, y_center]
+            # how much to move => x, y coords 
             shifts_x = torch.arange(
                 0, grid_width, dtype=torch.float32, device=device
             ) * stride_width
             shifts_y = torch.arange(
                 0, grid_height, dtype=torch.float32, device=device
             ) * stride_height
+
             shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
             shift_x = shift_x.reshape(-1)
             shift_y = shift_y.reshape(-1)
@@ -89,11 +91,13 @@ class AnchorGenerator(nn.Module):
 
     def forward(self, image_list: ImageList, feature_maps: List[Tensor]) -> List[Tensor]:
 
-        # height, width for every feature maps and image list 
+        # grid_sizes : height, width for every feature maps and image list per batch
+        # image_size : original image size 
         grid_sizes = [feature_map.shape[-2:] for feature_map in feature_maps]
         image_size = image_list.tensors.shape[-2:]
         dtype, device = feature_maps[0].dtype, feature_maps[0].device
 
+        # strides : stride within width and height of feature maps 
         strides = [[torch.tensor(image_size[0] // g[0], dtype=torch.int64, device=device),
                     torch.tensor(image_size[1] // g[1], dtype=torch.int64, device=device)] for g in grid_sizes]
         self.set_cell_anchors(dtype, device)
@@ -110,18 +114,18 @@ if __name__ == "__main__":
 
     # usage example
     # image, features : (batch, channel, height, width)
-    image = torch.randint(256, (100, 3, 64, 64))
+    image = torch.randint(256, (2, 3, 512, 512))
     image = ImageList(image, image.shape)
-    features = list(torch.randn(100, 3, 16, 16))
+    features = list(torch.randn(2, 256, 16, 16))
 
     # anchor generator
-    anchor_sizes = ((128,), (256,), (512,))
-    aspect_ratios = ((0.5, 1.0, 2.0)) * len(anchor_sizes)
+    anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
+    aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
     anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
 
     # output 
     # outputs length : 4
-    # output shape : (6912, 4)
+    # output shape : (4608, 4)
     outputs = anchor_generator(image, features)
     print(len(outputs))
 
