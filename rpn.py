@@ -3,27 +3,15 @@ from torch.nn import functional as F
 from torch import nn, Tensor
 
 import torchvision
-from torchvision.ops import boxes as box_ops
+import boxes as box_ops
 
-from . import _utils as det_utils
-from .image_list import ImageList
+import _utils as det_utils
+from image_list import ImageList
 
 from typing import List, Optional, Dict, Tuple
 
 # Import AnchorGenerator to keep compatibility.
-from .anchor_utils import AnchorGenerator
-
-
-@torch.jit.unused
-def _onnx_get_num_anchors_and_pre_nms_top_n(ob, orig_pre_nms_top_n):
-    # type: (Tensor, int) -> Tuple[int, int]
-    from torch.onnx import operators
-    num_anchors = operators.shape_as_tensor(ob)[1].unsqueeze(0)
-    pre_nms_top_n = torch.min(torch.cat(
-        (torch.tensor([orig_pre_nms_top_n], dtype=num_anchors.dtype),
-         num_anchors), 0))
-
-    return num_anchors, pre_nms_top_n
+from anchor_utils import AnchorGenerator
 
 
 class RPNHead(nn.Module):
@@ -36,6 +24,7 @@ class RPNHead(nn.Module):
 
     def __init__(self, in_channels, num_anchors):
         super(RPNHead, self).__init__()
+
         self.conv = nn.Conv2d(
             in_channels, in_channels, kernel_size=3, stride=1, padding=1
         )
@@ -52,6 +41,7 @@ class RPNHead(nn.Module):
         # type: (List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]
         logits = []
         bbox_reg = []
+
         for feature in x:
             t = F.relu(self.conv(feature))
             logits.append(self.cls_logits(t))
@@ -60,7 +50,10 @@ class RPNHead(nn.Module):
 
 
 def permute_and_flatten(layer, N, A, C, H, W):
+    # permute and flatten feature maps 
+    # (N, A, C, H, W) = (batch size, anchor num, class num, height, width)
     # type: (Tensor, int, int, int, int, int) -> Tensor
+    # shape : (N, AxC, H, W) -> (N, AxHxW, C)
     layer = layer.view(N, -1, C, H, W)
     layer = layer.permute(0, 3, 4, 1, 2)
     layer = layer.reshape(N, -1, C)
@@ -71,17 +64,23 @@ def concat_box_prediction_layers(box_cls, box_regression):
     # type: (List[Tensor], List[Tensor]) -> Tuple[Tensor, Tensor]
     box_cls_flattened = []
     box_regression_flattened = []
+
     # for each feature level, permute the outputs to make them be in the
     # same format as the labels. Note that the labels are computed for
     # all feature levels concatenated, so we keep the same representation
     # for the objectness and the box_regression
+
+    # class prediction and bbox regression per feature pyramid level 
     for box_cls_per_level, box_regression_per_level in zip(
         box_cls, box_regression
     ):
         N, AxC, H, W = box_cls_per_level.shape
         Ax4 = box_regression_per_level.shape[1]
-        A = Ax4 // 4
-        C = AxC // A
+        A = Ax4 // 4 # number of anchors 
+        C = AxC // A # number of classes
+
+        # box_cls_per_level : (N, AxHxW, C)
+        # box_regression_per_level : (N, AxHxW, 4)
         box_cls_per_level = permute_and_flatten(
             box_cls_per_level, N, A, C, H, W
         )
@@ -91,6 +90,7 @@ def concat_box_prediction_layers(box_cls, box_regression):
             box_regression_per_level, N, A, 4, H, W
         )
         box_regression_flattened.append(box_regression_per_level)
+        
     # concatenate on the first dimension (representing the feature levels), to
     # take into account the way the labels were generated (with all feature maps
     # being concatenated as well)
