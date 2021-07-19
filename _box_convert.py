@@ -75,3 +75,15 @@ def _box_xyxy_to_xywh(boxes: Tensor) -> Tensor:
     h = y2 - y1  # y2 - y1
     boxes = torch.stack((x1, y1, w, h), dim=-1)
     return boxes
+
+if __name__ == "__main__":
+    # usage example 
+    # xywh -> x1y1x2y2
+    boxes = torch.Tensor([[10, 15, 20, 30], [23, 34, 15, 20]])
+    transformed = _box_xywh_to_xyxy(boxes)
+
+    """
+    tensor([[10., 15., 30., 45.], 
+            [23., 34., 38., 54.]])  
+    """
+    print(transformed)
