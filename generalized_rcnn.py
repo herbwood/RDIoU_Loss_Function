@@ -1,7 +1,3 @@
-"""
-Implements the Generalized R-CNN framework
-"""
-
 from collections import OrderedDict
 import torch
 from torch import nn, Tensor
@@ -27,16 +23,6 @@ class GeneralizedRCNN(nn.Module):
         self.backbone = backbone
         self.rpn = rpn
         self.roi_heads = roi_heads
-        # used only on torchscript mode
-        self._has_warned = False
-
-    @torch.jit.unused
-    def eager_outputs(self, losses, detections):
-        # type: (Dict[str, Tensor], List[Dict[str, Tensor]]) -> Union[Dict[str, Tensor], List[Dict[str, Tensor]]]
-        if self.training:
-            return losses
-
-        return detections
 
     def forward(self, images, targets=None):
         # type: (List[Tensor], Optional[List[Dict[str, Tensor]]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
@@ -52,6 +38,7 @@ class GeneralizedRCNN(nn.Module):
         """
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
+
         if self.training:
             assert targets is not None
             for target in targets:
@@ -65,6 +52,7 @@ class GeneralizedRCNN(nn.Module):
                     raise ValueError("Expected target boxes to be of type "
                                      "Tensor, got {:}.".format(type(boxes)))
 
+        # get original image size 
         original_image_sizes: List[Tuple[int, int]] = []
         for img in images:
             val = img.shape[-2:]
@@ -78,6 +66,8 @@ class GeneralizedRCNN(nn.Module):
         if targets is not None:
             for target_idx, target in enumerate(targets):
                 boxes = target["boxes"]
+
+                # if x2, y2 is smaller than x1, y1, degenerate 
                 degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
                 if degenerate_boxes.any():
                     # print the first degenerate box
@@ -98,10 +88,4 @@ class GeneralizedRCNN(nn.Module):
         losses.update(detector_losses)
         losses.update(proposal_losses)
 
-        if torch.jit.is_scripting():
-            if not self._has_warned:
-                warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")
-                self._has_warned = True
-            return losses, detections
-        else:
-            return self.eager_outputs(losses, detections)
+        return self.eager_outputs(losses, detections)
