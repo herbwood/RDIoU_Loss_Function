@@ -79,8 +79,8 @@ def concat_box_prediction_layers(box_cls, box_regression):
         A = Ax4 // 4 # number of anchors 
         C = AxC // A # number of classes
 
-        # box_cls_per_level : (N, AxHxW, C)
-        # box_regression_per_level : (N, AxHxW, 4)
+        # box_cls_per_level shape : (N, AxHxW, C)
+        # box_regression_per_level shape : (N, AxHxW, 4)
         box_cls_per_level = permute_and_flatten(
             box_cls_per_level, N, A, C, H, W
         )
@@ -94,8 +94,12 @@ def concat_box_prediction_layers(box_cls, box_regression):
     # concatenate on the first dimension (representing the feature levels), to
     # take into account the way the labels were generated (with all feature maps
     # being concatenated as well)
+
+    # box_cls shape : (NxAxHxW, C)
+    # box_regression shape : (NxAxHxW, 4)
     box_cls = torch.cat(box_cls_flattened, dim=1).flatten(0, -2)
     box_regression = torch.cat(box_regression_flattened, dim=1).reshape(-1, 4)
+
     return box_cls, box_regression
 
 
@@ -179,6 +183,7 @@ class RegionProposalNetwork(torch.nn.Module):
         for anchors_per_image, targets_per_image in zip(anchors, targets):
             gt_boxes = targets_per_image["boxes"]
 
+            # if no ground truth 
             if gt_boxes.numel() == 0:
                 # Background image (negative example)
                 device = anchors_per_image.device
@@ -213,11 +218,8 @@ class RegionProposalNetwork(torch.nn.Module):
         r = []
         offset = 0
         for ob in objectness.split(num_anchors_per_level, 1):
-            if torchvision._is_tracing():
-                num_anchors, pre_nms_top_n = _onnx_get_num_anchors_and_pre_nms_top_n(ob, self.pre_nms_top_n())
-            else:
-                num_anchors = ob.shape[1]
-                pre_nms_top_n = min(self.pre_nms_top_n(), num_anchors)
+            num_anchors = ob.shape[1]
+            pre_nms_top_n = min(self.pre_nms_top_n(), num_anchors)
             _, top_n_idx = ob.topk(pre_nms_top_n, dim=1)
             r.append(top_n_idx + offset)
             offset += num_anchors
