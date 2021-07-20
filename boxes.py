@@ -208,6 +208,7 @@ def box_area(boxes: Tensor) -> Tensor:
         Tensor[N]: the area for each box
     """
     boxes = _upcast(boxes)
+    # area = with(x2-x1) x height(y2-y1)
     return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
 
 
@@ -220,6 +221,8 @@ def _box_inter_union(boxes1: Tensor, boxes2: Tensor) -> Tuple[Tensor, Tensor]:
     lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
     rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
 
+    # width and height
+    # intersection area
     wh = _upcast(rb - lt).clamp(min=0)  # [N,M,2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
