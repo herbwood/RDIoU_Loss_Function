@@ -99,3 +99,131 @@ def concat_box_prediction_layers(box_cls, box_regression):
     box_cls = torch.cat(box_cls_flattened, dim=1).flatten(0, -2)
     box_regression = torch.cat(box_regression_flattened, dim=1).reshape(-1, 4)
     return box_cls, box_regression 
+
+class RegionProposalNetwork(nn.Module):
+    """
+    Implements Region Proposal Network (RPN)
+
+    Args:
+        anchor_generator (AnchorGenerator): module that generates the anchors for a set of feature 
+            maps.
+        head (nn.Module): module that computes the objectness and regression deltas.
+        fg_iou_thresh (float): minimum IoU between the anchor and the Gt box so that they can be
+            considered as positive during training of the RPN
+        bg_iou_thresh (float): maximum IoU between the anchor and the GT box so that they can be
+            considered as negative during training of the RPN
+        batch_size_per_image (int): number of anchors that are sampled during training of the RPN
+            for computing the loss.
+        positive_fraction (float): proportion of positive anchors in a mini-batch during training
+            of the RPN.
+        pre_nms_top_n (Dict[int]): number of proposals to keep before applying NMS. It should
+            contain two fields. training and testing, to allow for different values depending 
+            on training or evaluation.
+        post_nms_top_n (Dict[int]): number of proposals to keep after applying NMS. It should 
+            contain two fields: training and testing, to allow for different values depending 
+            on training or evaluation.
+        nms_thresh (float): NMS threshold used for postprocessing the RPN proposals.
+    """
+    __annotations__ = {
+        'box_coder': det_utils.BoxCoder,
+        'proposal_matcher': det_utils.Matcher,
+        'fg_bg_sampler': det_utils.BalancedPositiveNegativeSampler,
+        'pre_nms_top_n': Dict[str, int],
+        'post_nms_top_n': Dict[str, int],
+    }
+
+    def __init__(self,
+                 anchor_generator,
+                 head,
+                 fg_iou_thresh, bg_iou_thresh,
+                 batch_size_per_image, positive_fraction,
+                 pre_nms_top_n, post_nms_top_n, nms_thresh, score_thresh=0.0):
+        super(RegionProposalNetwork, self).__init__()
+        self.anchor_generator = anchor_generator
+        self.head = head
+        self.box_coder = det_utils.BoxCoder(weights=(1.0, 1.0, 1.0))
+
+        # used during training 
+        self.box_similarity = box_ops.box_iou
+
+        self.proposal_matcher = det_utils.Matcher(
+            fg_iou_thresh,
+            bg_iou_thresh,
+            allow_low_quality_matches=True
+        )
+
+        self.fg_bg_sampler = det_utils.BalancedPositiveNegativeSampler(
+            batch_size_per_image, positive_fraction
+        )
+        # used during testing 
+        self._pre_nms_top_n = pre_nms_top_n
+        self._post_nms_top_n = post_nms_top_n
+        self.nms_thresh = nms_thresh
+        self.score_thresh = score_thresh
+        self.min_size = 1e-3
+
+    def pre_nms_top_n(self):
+        if self.training:
+            return self._pre_nms_top_n['training']
+        return self._pre_nms_top_n['testing']
+
+    def post_nms_top_n(self):
+        if self.training:
+            return self._post_nms_top_n['testing']
+        return self._post_nms_top_n
+
+    def assign_targets_to_anchors(self, anchors, targets):
+        # type: (List[Tensor], List[Dict[str, Tensor]]) -> Tuple[List[Tensor], List[Tensor]]
+        labels = []
+        matched_gt_boxes = []
+        for anchors_per_image, targets_per_image in zip(anchors, targets):
+            gt_boxes = targets_per_image["boxes"]
+
+            # if gt box is None
+            # fill matched_gt_boxes_per_image and labels_per_image with zero values 
+            if gt_boxes.numel() == 0:
+                # Background image (negative example)
+                device = anchors_per_image.device
+                matched_gt_boxes_per_image = torch.zeros(anchors_per_image.shape, dtype=torch.float32, device=device)
+                labels_per_image = torch.zeros((anchors_per_image.shape[0],), dtype=torch.float32, device=device)
+            else:
+                # get iou value between anchors and gt boxes 
+                match_quality_matrix = self.box_similarity(gt_boxes, anchors_per_image)
+
+                # -1 : negative 
+                # -2 : ignore 
+                matched_idxs = self.proposal_matcher(match_quality_matrix)
+                # get the targets corresponding GT for each proposal
+                # NB: need to clamp the indices because we can have a single
+                # GT in the image, and matched_idxs can be -2, which goes
+                # out of bounds
+                matched_gt_boxes_per_image = gt_boxes[matched_idxs.clamp(min=0)]
+
+                # assign label with 0 if negative, and -1 if ignore 
+                labels_per_image = matched_idxs >= 0
+                labels_per_image = labels_per_image.to(dtype=torch.float32)
+
+                # Background (negative examples)
+                bg_indices = matched_idxs == self.proposal_matcher.BELOW_LOW_THRESHOLD
+                labels_per_image[bg_indices] = 0.0
+
+                # discard indices that are between thresholds
+                inds_to_discard = matched_idxs == self.proposal_matcher.BETWEEN_THRESHOLDS
+                labels_per_image[inds_to_discard] = -1.0
+
+            labels.append(labels_per_image)
+            matched_gt_boxes.append(matched_gt_boxes_per_image)
+        return labels, matched_gt_boxes
+
+    def _get_top_n_idx(self, objectness, num_anchors_per_level):
+        # type: (Tensor, List[int]) -> Tensor
+        r = []
+        offset = 0
+        for ob in objectness.split(num_anchors_per_level, 1):
+            num_anchors = ob.shape[1]
+            pre_nms_top_n = min(self.pre_nms_top_n(), num_anchors)
+            _, top_n_idx = ob.topk(pre_nms_top_n, dim=1)
+            r.append(top_n_idx + offset)
+            offset += num_anchors
+        return torch.cat(r, dim=1)
+    
